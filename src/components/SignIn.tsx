@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 type AuthStep = 'phone' | 'verification' | 'success';
 
@@ -6,6 +6,13 @@ interface FormData {
   name: string;
   phone: string;
   code: string;
+}
+
+interface User {
+  id: string;
+  name: string;
+  phone: string;
+  profileImageUrl: string | null;
 }
 
 const SignIn: React.FC = () => {
@@ -17,13 +24,47 @@ const SignIn: React.FC = () => {
   });
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [userLoading, setUserLoading] = useState<boolean>(false);
+  const [userError, setUserError] = useState<string>('');
+  const [initializing, setInitializing] = useState<boolean>(true);
 
-  const callGraphQL = async (query: string, variables: Record<string, string>) => {
+  const normalizePhoneNumber = (phone: string): string => {
+    // Remove all non-digit characters
+    const digitsOnly = phone.replace(/\D/g, '');
+    
+    // Handle different cases
+    if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
+      // Already has country code
+      return `+${digitsOnly}`;
+    } else if (digitsOnly.length === 10) {
+      // US number without country code
+      return `+1${digitsOnly}`;
+    } else if (digitsOnly.length > 11) {
+      // Too many digits, take the last 10 and assume US
+      const last10 = digitsOnly.slice(-10);
+      return `+1${last10}`;
+    } else {
+      // Less than 10 digits or other edge cases, return as-is with + prefix
+      return `+${digitsOnly}`;
+    }
+  };
+
+  const callGraphQL = async (query: string, variables: Record<string, string> = {}, useAuth: boolean = false) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (useAuth) {
+      const token = localStorage.getItem('basebase_token');
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+    }
+
     const response = await fetch('https://app.basebase.us/graphql', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         query,
         variables
@@ -39,6 +80,96 @@ const SignIn: React.FC = () => {
     return result.data;
   };
 
+  const fetchCurrentUser = async () => {
+    console.log('🔍 Fetching current user...');
+    setUserLoading(true);
+    setUserError('');
+
+    try {
+      const query = `
+        query GetMyUser {
+          getMyUser {
+            id
+            name
+            phone
+            profileImageUrl
+          }
+        }
+      `;
+
+      console.log('📡 Sending getMyUser query...');
+      const data = await callGraphQL(query, {}, true);
+      console.log('✅ Received user data:', data);
+      console.log('👤 User object:', data.getMyUser);
+      console.log('🖼️ Profile image URL:', data.getMyUser?.profileImageUrl);
+      
+      setCurrentUser(data.getMyUser);
+    } catch (err) {
+      console.error('❌ Error fetching user:', err);
+      setUserError(err instanceof Error ? err.message : 'Failed to fetch user information');
+    } finally {
+      setUserLoading(false);
+    }
+  };
+
+  // Check for existing token on component mount
+  useEffect(() => {
+    const checkExistingToken = async () => {
+      console.log('🔍 Checking for existing token...');
+      const token = localStorage.getItem('basebase_token');
+      
+      if (token) {
+        console.log('🎫 Found existing token, validating...');
+        try {
+          // Try to fetch user data to validate the token
+          const query = `
+            query GetMyUser {
+              getMyUser {
+                id
+                name
+                phone
+                profileImageUrl
+              }
+            }
+          `;
+
+          const data = await callGraphQL(query, {}, true);
+          console.log('✅ Token is valid, user data:', data.getMyUser);
+          
+          // Token is valid, go to success page
+          setCurrentUser(data.getMyUser);
+          setStep('success');
+        } catch (err) {
+          console.log('❌ Token is invalid or expired, removing from storage', err);
+          localStorage.removeItem('basebase_token');
+          // Stay on phone step
+        }
+      } else {
+        console.log('🚫 No existing token found');
+      }
+      
+      setInitializing(false);
+    };
+
+    checkExistingToken();
+  }, []);
+
+  useEffect(() => {
+    console.log('🔄 Step changed to:', step);
+    if (step === 'success') {
+      console.log('🎉 Reached success step, fetching user...');
+      fetchCurrentUser();
+    }
+  }, [step]);
+
+  useEffect(() => {
+    console.log('👤 Current user state updated:', currentUser);
+    if (currentUser) {
+      console.log('🖼️ Has profile image?', !!currentUser.profileImageUrl);
+      console.log('🖼️ Profile image URL value:', currentUser.profileImageUrl);
+    }
+  }, [currentUser]);
+
   const handleRequestCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -51,10 +182,18 @@ const SignIn: React.FC = () => {
         }
       `;
 
+      const normalizedPhone = normalizePhoneNumber(formData.phone);
+
       await callGraphQL(mutation, {
-        phone: formData.phone,
+        phone: normalizedPhone,
         name: formData.name
       });
+
+      // Update formData with normalized phone for consistency
+      setFormData(prev => ({
+        ...prev,
+        phone: normalizedPhone
+      }));
 
       setStep('verification');
     } catch (err) {
@@ -76,8 +215,10 @@ const SignIn: React.FC = () => {
         }
       `;
 
+      const normalizedPhone = normalizePhoneNumber(formData.phone);
+
       const data = await callGraphQL(mutation, {
-        phone: formData.phone,
+        phone: normalizedPhone,
         code: formData.code
       });
 
@@ -111,6 +252,25 @@ const SignIn: React.FC = () => {
     resetForm();
   };
 
+  // Show loading screen while checking for existing token
+  if (initializing) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
+          <div className="mb-8">
+            <div className="w-20 h-20 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full mx-auto flex items-center justify-center mb-4 animate-pulse">
+              <span className="text-3xl">🔍</span>
+            </div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Loading...</h1>
+            <p className="text-lg text-gray-600">
+              Checking authentication status
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (step === 'success') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center">
@@ -120,9 +280,56 @@ const SignIn: React.FC = () => {
               <span className="text-3xl">✅</span>
             </div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Success!</h1>
-            <p className="text-lg text-gray-600">
-              You're now authenticated with BaseBase
-            </p>
+            
+            {userLoading && (
+              <p className="text-lg text-gray-600">
+                Loading your profile...
+              </p>
+            )}
+            
+            {userError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-red-600 text-sm">{userError}</p>
+              </div>
+            )}
+            
+            {currentUser && !userLoading && (
+              <div className="space-y-4">
+                {(() => {
+                  console.log('🎨 Rendering user UI. Has profile image?', !!currentUser.profileImageUrl);
+                  console.log('🎨 Profile image URL for rendering:', currentUser.profileImageUrl);
+                  return null;
+                })()}
+                {currentUser.profileImageUrl ? (
+                  <div className="flex justify-center">
+                    <img
+                      src={currentUser.profileImageUrl}
+                      alt={`${currentUser.name}'s profile`}
+                      className="w-16 h-16 rounded-full object-cover border-2 border-gray-200"
+                      onLoad={() => console.log('🖼️ Profile image loaded successfully')}
+                      onError={() => console.log('❌ Profile image failed to load')}
+                    />
+                  </div>
+                ) : (() => {
+                  console.log('🚫 No profile image URL available');
+                  return null;
+                })()}
+                <div className="space-y-2">
+                  <p className="text-lg text-gray-600">
+                    Welcome back, <span className="font-semibold text-gray-900">{currentUser.name}</span>!
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    Signed in as {currentUser.phone}
+                  </p>
+                </div>
+              </div>
+            )}
+            
+            {!currentUser && !userLoading && !userError && (
+              <p className="text-lg text-gray-600">
+                You're now authenticated with BaseBase
+              </p>
+            )}
           </div>
           
           <button 

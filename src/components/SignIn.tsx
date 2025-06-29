@@ -348,7 +348,7 @@ const SignIn: React.FC = () => {
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
         <div className="mb-8 text-center">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            {step === 'phone' ? 'Sign In to BaseBase' : 'Enter Verification Code'}
+            {step === 'phone' ? 'Sign In' : 'Enter Verification Code'}
           </h1>
           <p className="text-lg text-gray-600">
             {step === 'phone' 

@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
+// Load environment variables
+const BASEBASE_API_KEY = import.meta.env.VITE_BASEBASE_API_KEY;
+
 type AuthStep = 'phone' | 'verification' | 'success';
 
 interface FormData {
@@ -50,7 +53,7 @@ const SignIn: React.FC = () => {
     }
   };
 
-  const callGraphQL = async (query: string, variables: Record<string, string> = {}, useAuth: boolean = false) => {
+  const callGraphQL = async (query: string, variables: Record<string, unknown> = {}, useAuth: boolean = false) => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -74,7 +77,9 @@ const SignIn: React.FC = () => {
     const result = await response.json();
     
     if (result.errors) {
-      throw new Error(result.errors[0].message);
+      console.error("GraphQL error response:", JSON.stringify(result.errors, null, 2));
+      const errorMessage = result.errors[0]?.message ?? 'An unknown error occurred';
+      throw new Error(errorMessage);
     }
     
     return result.data;
@@ -210,16 +215,21 @@ const SignIn: React.FC = () => {
 
     try {
       const mutation = `
-        mutation VerifyCode($phone: String!, $code: String!) {
-          verifyCode(phone: $phone, code: $code)
+        mutation VerifyCode($phone: String!, $code: String!, $projectApiKey: String!) {
+          verifyCode(phone: $phone, code: $code, projectApiKey: $projectApiKey)
         }
       `;
 
       const normalizedPhone = normalizePhoneNumber(formData.phone);
 
+      if (!BASEBASE_API_KEY) {
+        throw new Error('BASEBASE_API_KEY environment variable is required');
+      }
+
       const data = await callGraphQL(mutation, {
         phone: normalizedPhone,
-        code: formData.code
+        code: formData.code,
+        projectApiKey: BASEBASE_API_KEY
       });
 
       // Save JWT to localStorage

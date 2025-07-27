@@ -4,8 +4,10 @@ const ImproveThisButton: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
 
   const handleStartEditingClick = (): void => {
+    // get the user's token from Local Storage
+    const token = localStorage.getItem('basebase_token');
     window.open(
-      'https://editor.basebase.us/?repo=https://github.com/grenager/basebase-client-starter',
+      `https://editor.basebase.us/?project=test_project&repo=https://github.com/grenager/basebase-client-starter&token=${token}`,
       '_blank'
     );
   };

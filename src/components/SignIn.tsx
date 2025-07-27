@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { requestCode, verifyCode, getAuthState } from 'basebase-js';
 
 // Load environment variables
-const BASEBASE_API_KEY = import.meta.env.VITE_BASEBASE_API_KEY;
+const BASEBASE_PROJECT = import.meta.env.VITE_BASEBASE_PROJECT;
 
 type AuthStep = 'phone' | 'verification' | 'success';
 
@@ -53,110 +54,68 @@ const SignIn: React.FC = () => {
     }
   };
 
-  const callGraphQL = async (query: string, variables: Record<string, unknown> = {}, useAuth: boolean = false) => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    if (useAuth) {
-      const token = localStorage.getItem('basebase_token');
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-    }
-
-    const response = await fetch('https://app.basebase.us/graphql', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        query,
-        variables
-      })
-    });
-
-    const result = await response.json();
-    
-    if (result.errors) {
-      console.error("GraphQL error response:", JSON.stringify(result.errors, null, 2));
-      const errorMessage = result.errors[0]?.message ?? 'An unknown error occurred';
-      throw new Error(errorMessage);
-    }
-    
-    return result.data;
-  };
-
   const fetchCurrentUser = async () => {
     console.log('🔍 Fetching current user...');
     setUserLoading(true);
     setUserError('');
 
     try {
-      const query = `
-        query GetMyUser {
-          getMyUser {
-            id
-            name
-            phone
-            profileImageUrl
-          }
-        }
-      `;
-
-      console.log('📡 Sending getMyUser query...');
-      const data = await callGraphQL(query, {}, true);
-      console.log('✅ Received user data:', data);
-      console.log('👤 User object:', data.getMyUser);
-      console.log('🖼️ Profile image URL:', data.getMyUser?.profileImageUrl);
+      // Get the user data directly from the auth state
+      const authState = getAuthState();
       
-      setCurrentUser(data.getMyUser);
+      if (!authState.user || !authState.user.id) {
+        throw new Error('User ID not found. Please sign in again.');
+      }
+
+      // Use the user data directly from the auth state
+      const userData = authState.user as User;
+      console.log('✅ Using user data from auth state:', userData);
+      console.log('👤 User object:', userData);
+      console.log('🖼️ Profile image URL:', userData?.profileImageUrl);
+      
+      setCurrentUser(userData);
     } catch (err) {
-      console.error('❌ Error fetching user:', err);
-      setUserError(err instanceof Error ? err.message : 'Failed to fetch user information');
+      console.error('❌ Error getting user:', err);
+      setUserError(err instanceof Error ? err.message : 'Failed to get user information');
     } finally {
       setUserLoading(false);
     }
   };
 
-  // Check for existing token on component mount
+  // Check for existing authentication on component mount
   useEffect(() => {
-    const checkExistingToken = async () => {
-      console.log('🔍 Checking for existing token...');
-      const token = localStorage.getItem('basebase_token');
+    const checkExistingAuth = async () => {
+      console.log('🔍 Checking for existing authentication...');
       
-      if (token) {
-        console.log('🎫 Found existing token, validating...');
-        try {
-          // Try to fetch user data to validate the token
-          const query = `
-            query GetMyUser {
-              getMyUser {
-                id
-                name
-                phone
-                profileImageUrl
-              }
-            }
-          `;
-
-          const data = await callGraphQL(query, {}, true);
-          console.log('✅ Token is valid, user data:', data.getMyUser);
+      try {
+        // Use basebase-js getAuthState function
+        const authState = getAuthState();
+        
+        console.log('📋 Auth state:', authState);
+        
+        if (authState.isAuthenticated && authState.user && authState.project) {
+          console.log('🎫 Found existing authentication, user:', authState.user);
+          console.log('🏗️ Project:', authState.project);
           
-          // Token is valid, go to success page
-          setCurrentUser(data.getMyUser);
+          // Use the user data directly from the auth state
+          const userData = authState.user as User;
+          console.log('✅ Authentication is valid, using user data from auth state:', userData);
+          
+          // Authentication is valid, go to success page
+          setCurrentUser(userData);
           setStep('success');
-        } catch (err) {
-          console.log('❌ Token is invalid or expired, removing from storage', err);
-          localStorage.removeItem('basebase_token');
-          // Stay on phone step
+        } else {
+          console.log('🚫 No existing authentication found');
         }
-      } else {
-        console.log('🚫 No existing token found');
+      } catch (err) {
+        console.log('❌ Error checking authentication:', err);
+        // Stay on phone step on any error
       }
       
       setInitializing(false);
     };
 
-    checkExistingToken();
+    checkExistingAuth();
   }, []);
 
   useEffect(() => {
@@ -181,18 +140,10 @@ const SignIn: React.FC = () => {
     setError('');
 
     try {
-      const mutation = `
-        mutation RequestCode($phone: String!, $name: String!) {
-          requestCode(phone: $phone, name: $name)
-        }
-      `;
-
       const normalizedPhone = normalizePhoneNumber(formData.phone);
 
-      await callGraphQL(mutation, {
-        phone: normalizedPhone,
-        name: formData.name
-      });
+      // Use basebase-js SDK requestCode function
+      await requestCode(formData.name, normalizedPhone);
 
       // Update formData with normalized phone for consistency
       setFormData(prev => ({
@@ -214,26 +165,20 @@ const SignIn: React.FC = () => {
     setError('');
 
     try {
-      const mutation = `
-        mutation VerifyCode($phone: String!, $code: String!, $projectApiKey: String!) {
-          verifyCode(phone: $phone, code: $code, projectApiKey: $projectApiKey)
-        }
-      `;
-
       const normalizedPhone = normalizePhoneNumber(formData.phone);
 
-      if (!BASEBASE_API_KEY) {
-        throw new Error('BASEBASE_API_KEY environment variable is required');
+      if (!BASEBASE_PROJECT) {
+        throw new Error('VITE_BASEBASE_PROJECT environment variable is required');
       }
 
-      const data = await callGraphQL(mutation, {
-        phone: normalizedPhone,
-        code: formData.code,
-        projectApiKey: BASEBASE_API_KEY
-      });
+      // Use basebase-js SDK verifyCode function
+      const authResult = await verifyCode(normalizedPhone, formData.code, BASEBASE_PROJECT);
+      
+      console.log("User Id:", authResult.user.id);
+      console.log("Token:", authResult.token);
 
-      // Save JWT to localStorage
-      localStorage.setItem('basebase_token', data.verifyCode);
+      // The basebase-js SDK handles storing the authentication state automatically
+      // No need to manually store in localStorage
       
       setStep('success');
     } catch (err) {
@@ -257,8 +202,9 @@ const SignIn: React.FC = () => {
   };
 
   const handleSignOut = () => {
-    // Remove JWT from localStorage
+    // Remove JWT token and user ID from localStorage
     localStorage.removeItem('basebase_token');
+    localStorage.removeItem('basebase_user_id');
     resetForm();
   };
 
@@ -378,7 +324,7 @@ const SignIn: React.FC = () => {
           <form onSubmit={handleRequestCode} className="space-y-6">
             <div>
               <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
-                Name
+                Username
               </label>
               <input
                 type="text"
@@ -388,7 +334,7 @@ const SignIn: React.FC = () => {
                 onChange={handleInputChange}
                 required
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
-                placeholder="Enter your full name"
+                placeholder="Enter your username"
               />
             </div>
 
